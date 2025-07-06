@@ -8,8 +8,21 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sstream>
+#include <map>
 
 #define BUFFER_SIZE 4096
+
+std::string transform_to_lowercase(std::string s) {
+  std::string res = "";
+  for (int i = 0; i < (int) s.length(); i++) {
+    if (s[i] >= 'A' && s[i] <= 'Z') {
+      res += s[i] - 'A' + 'a';
+    } else {
+      res += s[i];
+    }
+  }
+  return res;
+}
 
 int main(int argc, char **argv) {
   // Flush after every std::cout / std::cerr
@@ -73,18 +86,32 @@ int main(int argc, char **argv) {
   }
   buffer[bytes_read] = '\0';
 
-  std::string request(buffer);
-  size_t line_end = request.find("\r\n");
-  std::string request_line = request.substr(0, line_end);
+  std::istringstream iss(buffer);
   
-  std::istringstream iss(request_line);
+  std::string line;
+  std::getline(iss, line);
+  std::istringstream request_stream(line);
   std::string method, path, version;
-  iss >> method >> path >> version;
-  
+  request_stream >> method >> path >> version;
+
+  std::map<std::string, std::string> headers;
+  while (std::getline(iss, line) && line != "\r") {
+    int colon_pos = line.find(':');
+    if (colon_pos != std::string::npos) {
+      std::string key = line.substr(0, colon_pos);
+      std::string val = line.substr(colon_pos + 2);
+      val.pop_back(); // need to pop the \r
+      headers[transform_to_lowercase(key)] = val;
+    }
+  }
+
   if (path == "/") {
     send(client_socket, "HTTP/1.1 200 OK\r\n\r\n", 19, 0);
   } else if (path.substr(0, 5) == "/echo") {
     std::string response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " + std::to_string((int) path.length() - 6) + "\r\n\r\n" + path.substr(6, (int) path.length() - 6);
+    send(client_socket, response.c_str(), response.length(), 0);
+  } else if (path.find("/user-agent") != std::string::npos && headers.find("user-agent") != headers.end()) {
+    std::string response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " + std::to_string(headers["user-agent"].length()) + "\r\n\r\n" + headers["user-agent"];
     send(client_socket, response.c_str(), response.length(), 0);
   } else {
     send(client_socket, "HTTP/1.1 404 Not Found\r\n\r\n", 26, 0);
