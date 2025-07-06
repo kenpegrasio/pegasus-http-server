@@ -7,6 +7,9 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <sstream>
+
+#define BUFFER_SIZE 4096
 
 int main(int argc, char **argv) {
   // Flush after every std::cout / std::cerr
@@ -60,7 +63,29 @@ int main(int argc, char **argv) {
     return 1;
   }
   std::cout << "Client connected\n";
-  send(client_socket, "HTTP/1.1 200 OK\r\n\r\n", 19, 0);
+
+  char buffer[BUFFER_SIZE] = {0};
+  int bytes_read = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
+  if (bytes_read <= 0) {
+    std::cerr << "Failed to receive data from client" << std::endl;
+    close(client_socket);
+    return 1;
+  }
+  buffer[bytes_read] = '\0';
+
+  std::string request(buffer);
+  size_t line_end = request.find("\r\n");
+  std::string request_line = request.substr(0, line_end);
+  
+  std::istringstream iss(request_line);
+  std::string method, path, version;
+  iss >> method >> path >> version;
+  
+  if (path == "/") {
+    send(client_socket, "HTTP/1.1 200 OK\r\n\r\n", 19, 0);
+  } else {
+    send(client_socket, "HTTP/1.1 404 Not Found\r\n\r\n", 26, 0);
+  }
   
   close(server_fd);
 
