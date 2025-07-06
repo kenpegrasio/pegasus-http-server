@@ -83,6 +83,9 @@ int main(int argc, char **argv) {
   
   if (path == "/") {
     send(client_socket, "HTTP/1.1 200 OK\r\n\r\n", 19, 0);
+  } else if (path.substr(0, 5) == "/echo") {
+    std::string response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " + std::to_string((int) path.length() - 6) + "\r\n\r\n" + path.substr(6, (int) path.length() - 6);
+    send(client_socket, response.c_str(), response.length(), 0);
   } else {
     send(client_socket, "HTTP/1.1 404 Not Found\r\n\r\n", 26, 0);
   }
