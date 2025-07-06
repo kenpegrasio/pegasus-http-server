@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <sstream>
@@ -26,7 +27,7 @@ std::string transform_to_lowercase(std::string s) {
   return res;
 }
 
-void process_client(int client_socket) {
+void process_client(int client_socket, std::string &directory) {
   char buffer[BUFFER_SIZE] = {0};
   int bytes_read = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
   if (bytes_read <= 0) {
@@ -70,6 +71,22 @@ void process_client(int client_socket) {
         std::to_string(headers["user-agent"].length()) + "\r\n\r\n" +
         headers["user-agent"];
     send(client_socket, response.c_str(), response.length(), 0);
+  } else if (path.find("/files") != std::string::npos) {
+    std::string filename = path.substr(7);
+    std::ifstream inputFile(directory + filename);
+    if (!inputFile.is_open()) {
+      send(client_socket, "HTTP/1.1 404 Not Found\r\n\r\n", 26, 0);
+      return;
+    } else {
+      std::string line;
+      std::string res = "";
+      while (std::getline(inputFile, line)) {
+        res += line + '\n';
+      }
+      res.pop_back(); // remove the last \n
+      std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: " + std::to_string(res.length()) + "\r\n\r\n" + res;
+      send(client_socket, response.c_str(), response.length(), 0);
+    }
   } else {
     send(client_socket, "HTTP/1.1 404 Not Found\r\n\r\n", 26, 0);
   }
@@ -80,6 +97,17 @@ int main(int argc, char **argv) {
   // Flush after every std::cout / std::cerr
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
+
+  // Process argument
+  std::string directory = "";
+  for (int i = 1; i < argc; i++) {
+    std::string arg = argv[i];
+    if (arg == "--directory") {
+      if (i + 1 < argc) {
+        directory = argv[i + 1];
+      }
+    }
+  }
 
   // You can use print statements as follows for debugging, they'll be visible
   // when running tests.
@@ -134,7 +162,7 @@ int main(int argc, char **argv) {
       return 1;
     }
     std::cout << "Client connected\n";
-    std::thread t(process_client, client_socket);
+    std::thread t(process_client, client_socket, std::ref(directory));
     t.detach();
   }
 
