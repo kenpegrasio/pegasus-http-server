@@ -56,6 +56,27 @@ void process_client(int client_socket, std::string &directory) {
     }
   }
 
+  std::string body_input = "";
+  while (std::getline(iss, line)) {
+    body_input += line + '\n';
+  }
+  body_input.pop_back(); // remove the last \n
+
+  if (method == "POST") {
+    if (path.find("/files") != std::string::npos) {
+      if (directory == "") {
+        send(client_socket, "HTTP/1.1 404 Not Found\r\n\r\n", 26, 0);
+        return;
+      }
+      std::string filename = path.substr(7);
+      std::ofstream outputFile(directory + filename);
+      outputFile << body_input;
+      send(client_socket, "HTTP/1.1 201 Created\r\n\r\n", 24, 0);
+    }
+    return;
+  } 
+
+  // GET request handler
   if (path == "/") {
     send(client_socket, "HTTP/1.1 200 OK\r\n\r\n", 19, 0);
   } else if (path.substr(0, 5) == "/echo") {
