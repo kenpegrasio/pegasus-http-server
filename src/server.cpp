@@ -138,116 +138,120 @@ std::vector<std::string> split_compression_header(
 }
 
 void process_client(int client_socket, std::string &directory) {
-  std::string res = "";
   while (true) {
-    char buffer[BUFFER_SIZE] = {0};
-    int bytes_read = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
-    if (bytes_read <= 0) {
-      std::cerr << "Failed to receive data from client" << std::endl;
-      close(client_socket);
-      return;
+    std::string res = "";
+    while (true) {
+      char buffer[BUFFER_SIZE] = {0};
+      int bytes_read = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
+      if (bytes_read <= 0) {
+        std::cerr << "Failed to receive data from client" << std::endl;
+        close(client_socket);
+        return;
+      }
+      buffer[bytes_read] = '\0';
+      res += buffer;
+      if (res.find("\r\n\r\n") != std::string::npos) break;
     }
-    buffer[bytes_read] = '\0';
-    res += buffer;
-    if (res.find("\r\n\r\n") != std::string::npos) break;
-  }
 
-  std::istringstream iss(res);
+    std::istringstream iss(res);
 
-  std::string line;
-  std::getline(iss, line);
+    std::string line;
+    std::getline(iss, line);
 
-  // Parse Request
-  // Parse Request Start Line
-  std::istringstream request_stream(line);
-  std::string method, path, version;
-  request_stream >> method >> path >> version;
+    // Parse Request
+    // Parse Request Start Line
+    std::istringstream request_stream(line);
+    std::string method, path, version;
+    request_stream >> method >> path >> version;
 
-  // Parse Request Headers
-  std::map<std::string, std::string> request_headers;
-  while (std::getline(iss, line) && line != "\r") {
-    int colon_pos = line.find(':');
-    if (colon_pos != std::string::npos) {
-      std::string key = line.substr(0, colon_pos);
-      std::string val = line.substr(colon_pos + 2);
-      val.pop_back();  // need to pop the \r
-      request_headers[transform_to_lowercase(key)] = val;
-    }
-  }
-
-  // Parse Request Body
-  std::string request_body = "";
-  while (std::getline(iss, line)) {
-    request_body += line + '\n';
-  }
-  request_body.pop_back();  // remove the last \n
-
-  // Construct Response
-  HttpResponseStartLine response_start_line = HttpResponseStartLine(200);
-  std::map<std::string, std::string> response_headers;
-  std::string response_body = "";
-
-  bool compress_body = false;
-  if (request_headers.find("accept-encoding") != request_headers.end() &&
-      request_headers["accept-encoding"].find("gzip") != std::string::npos) {
-    std::vector<std::string> compression_headers =
-        split_compression_header(request_headers["accept-encoding"], ',');
-    for (auto compression_header : compression_headers) {
-      if (compression_header == "gzip") {
-        compress_body = true;
-        add_response_header(response_headers, "Content-Encoding", "gzip");
-        break;
+    // Parse Request Headers
+    std::map<std::string, std::string> request_headers;
+    while (std::getline(iss, line) && line != "\r") {
+      int colon_pos = line.find(':');
+      if (colon_pos != std::string::npos) {
+        std::string key = line.substr(0, colon_pos);
+        std::string val = line.substr(colon_pos + 2);
+        val.pop_back();  // need to pop the \r
+        request_headers[transform_to_lowercase(key)] = val;
       }
     }
-  }
 
-  if (method == "POST") {
-    if (path.find("/files") != std::string::npos) {
-      if (directory == "") {
-        response_start_line = HttpResponseStartLine(404);
-      } else {
-        std::string filename = path.substr(7);
-        std::ofstream outputFile(directory + filename);
-        outputFile << request_body;
-        response_start_line = HttpResponseStartLine(201);
-      }
+    // Parse Request Body
+    std::string request_body = "";
+    while (std::getline(iss, line)) {
+      request_body += line + '\n';
     }
-  } else if (method == "GET") {  // GET request handler
-    if (path == "/")
-      ;
-    else if (path.substr(0, 5) == "/echo") {
-      add_response_header(response_headers, "Content-Type", "text/plain");
-      response_body = path.substr(6, (int)path.length() - 6);
-    } else if (path.find("/user-agent") != std::string::npos &&
-               request_headers.find("user-agent") != request_headers.end()) {
-      add_response_header(response_headers, "Content-Type", "text/plain");
-      response_body = request_headers["user-agent"];
-    } else if (path.find("/files") != std::string::npos) {
-      std::string filename = path.substr(7);
-      std::ifstream inputFile(directory + filename);
-      if (!inputFile.is_open()) {
-        response_start_line = HttpResponseStartLine(404);
-      } else {
-        std::string inputLine;
-        std::string res = "";
-        while (std::getline(inputFile, inputLine)) {
-          res += inputLine + '\n';
+    request_body.pop_back();  // remove the last \n
+
+    // Construct Response
+    HttpResponseStartLine response_start_line = HttpResponseStartLine(200);
+    std::map<std::string, std::string> response_headers;
+    std::string response_body = "";
+
+    bool compress_body = false;
+    if (request_headers.find("accept-encoding") != request_headers.end() &&
+        request_headers["accept-encoding"].find("gzip") != std::string::npos) {
+      std::vector<std::string> compression_headers =
+          split_compression_header(request_headers["accept-encoding"], ',');
+      for (auto compression_header : compression_headers) {
+        if (compression_header == "gzip") {
+          compress_body = true;
+          add_response_header(response_headers, "Content-Encoding", "gzip");
+          break;
         }
-        res.pop_back();  // remove the last \n
-        add_response_header(response_headers, "Content-Type",
-                            "application/octet-stream");
-        response_body = res;
       }
-    } else {
-      response_start_line = HttpResponseStartLine(404);
     }
-  }
 
-  if (compress_body) {
-    response_body = gzip_compress(response_body);
+    if (method == "POST") {
+      if (path.find("/files") != std::string::npos) {
+        if (directory == "") {
+          response_start_line = HttpResponseStartLine(404);
+        } else {
+          std::string filename = path.substr(7);
+          std::ofstream outputFile(directory + filename);
+          outputFile << request_body;
+          response_start_line = HttpResponseStartLine(201);
+        }
+      }
+    } else if (method == "GET") {  // GET request handler
+      if (path == "/")
+        ;
+      else if (path.substr(0, 5) == "/echo") {
+        add_response_header(response_headers, "Content-Type", "text/plain");
+        response_body = path.substr(6, (int)path.length() - 6);
+      } else if (path.find("/user-agent") != std::string::npos &&
+                 request_headers.find("user-agent") != request_headers.end()) {
+        add_response_header(response_headers, "Content-Type", "text/plain");
+        response_body = request_headers["user-agent"];
+      } else if (path.find("/files") != std::string::npos) {
+        std::string filename = path.substr(7);
+        std::ifstream inputFile(directory + filename);
+        if (!inputFile.is_open()) {
+          response_start_line = HttpResponseStartLine(404);
+        } else {
+          std::string inputLine;
+          std::string res = "";
+          while (std::getline(inputFile, inputLine)) {
+            res += inputLine + '\n';
+          }
+          res.pop_back();  // remove the last \n
+          add_response_header(response_headers, "Content-Type",
+                              "application/octet-stream");
+          response_body = res;
+        }
+      } else {
+        response_start_line = HttpResponseStartLine(404);
+      }
+    }
+
+    if (compress_body) {
+      response_body = gzip_compress(response_body);
+    }
+    add_response_header(response_headers, "Content-Length",
+                        std::to_string(response_body.size()));
+    send_response(client_socket, response_start_line, response_headers,
+                  response_body);
   }
-  add_response_header(response_headers, "Content-Length", std::to_string(response_body.size()));
-  send_response(client_socket, response_start_line, response_headers, response_body);
 
   close(client_socket);
 }
