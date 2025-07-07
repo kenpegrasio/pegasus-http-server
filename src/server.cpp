@@ -12,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 #define BUFFER_SIZE 4096
 
@@ -90,6 +91,22 @@ void send_response(int client_socket, HttpResponseStartLine start_line,
   send(client_socket, res.c_str(), res.length(), 0);
 }
 
+std::vector<std::string> split_compression_header(std::string compression_header, char delimiter) {
+  std::vector<std::string> res;
+  std::string cur = "";
+  for (int i = 0; i < (int) compression_header.size(); i++) {
+    if (compression_header[i] == ' ') continue;
+    if (compression_header[i] == delimiter) {
+      res.push_back(cur);
+      cur.clear();
+      continue;
+    }
+    cur += compression_header[i];
+  }
+  if (!cur.empty()) res.push_back(cur);
+  return res;
+}
+
 void process_client(int client_socket, std::string &directory) {
   char buffer[BUFFER_SIZE] = {0};
   int bytes_read = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
@@ -134,8 +151,13 @@ void process_client(int client_socket, std::string &directory) {
   // Construct Response
   std::map<std::string, std::string> response_headers;
 
-  if (request_headers.find("accept-encoding") != request_headers.end() && request_headers["accept-encoding"] == "gzip") {
-    add_response_header(response_headers, "Content-Encoding", "gzip");
+  if (request_headers.find("accept-encoding") != request_headers.end() && request_headers["accept-encoding"].find("gzip") != std::string::npos) {
+    std::vector<std::string> compression_headers = split_compression_header(request_headers["accept-encoding"], ',');
+    for (auto compression_header : compression_headers) {
+      if (compression_header == "gzip") {
+        add_response_header(response_headers, "Content-Encoding", "gzip");
+      }
+    }
   }
 
   if (method == "POST") {
