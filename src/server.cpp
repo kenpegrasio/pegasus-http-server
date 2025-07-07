@@ -15,7 +15,7 @@
 
 #define BUFFER_SIZE 4096
 
-std::string transform_to_lowercase(std::string s) {
+std::string transform_to_lowercase(std::string &s) {
   std::string res = "";
   for (int i = 0; i < (int)s.length(); i++) {
     if (s[i] >= 'A' && s[i] <= 'Z') {
@@ -25,6 +25,69 @@ std::string transform_to_lowercase(std::string s) {
     }
   }
   return res;
+}
+
+struct HttpResponseStartLine {
+  std::string protocol;
+  std::string status_code;
+  std::string status_text;
+
+  HttpResponseStartLine(int identifier, std::string new_protocol = "HTTP/1.1") {
+    protocol = new_protocol;
+    status_code = std::to_string(identifier);
+    if (identifier == 404)
+      status_text = "Not Found";
+    else if (identifier == 200)
+      status_text = "OK";
+    else if (identifier == 201)
+      status_text = "Created";
+  }
+
+  HttpResponseStartLine(std::string new_protocol, std::string new_status_code,
+                        std::string new_status_text) {
+    protocol = new_protocol;
+    status_code = new_status_code;
+    status_text = new_status_text;
+  }
+};
+
+void add_response_header(std::map<std::string, std::string> &headers,
+                         const std::string &key, const std::string &val) {
+  headers[key] = val;
+}
+
+void send_response(int client_socket, HttpResponseStartLine start_line) {
+  std::string res = "";
+  res += start_line.protocol + " " + start_line.status_code + " " +
+         start_line.status_text + "\r\n";
+  res += "\r\n";
+  send(client_socket, res.c_str(), res.length(), 0);
+}
+
+void send_response(int client_socket, HttpResponseStartLine start_line,
+                   std::map<std::string, std::string> &headers) {
+  std::string res = "";
+  res += start_line.protocol + " " + start_line.status_code + " " +
+         start_line.status_text + "\r\n";
+  for (auto [key, val] : headers) {
+    res += key + ": " + val + "\r\n";
+  }
+  res += "\r\n";
+  send(client_socket, res.c_str(), res.length(), 0);
+}
+
+void send_response(int client_socket, HttpResponseStartLine start_line,
+                   std::map<std::string, std::string> &headers,
+                   const std::string &body_message) {
+  std::string res = "";
+  res += start_line.protocol + " " + start_line.status_code + " " +
+         start_line.status_text + "\r\n";
+  for (auto [key, val] : headers) {
+    res += key + ": " + val + "\r\n";
+  }
+  res += "\r\n";
+  res += body_message;
+  send(client_socket, res.c_str(), res.length(), 0);
 }
 
 void process_client(int client_socket, std::string &directory) {
@@ -41,75 +104,82 @@ void process_client(int client_socket, std::string &directory) {
 
   std::string line;
   std::getline(iss, line);
+
+  // Parse Request
+  // Parse Request Start Line 
   std::istringstream request_stream(line);
   std::string method, path, version;
   request_stream >> method >> path >> version;
 
-  std::map<std::string, std::string> headers;
+  // Parse Request Headers 
+  std::map<std::string, std::string> request_headers;
   while (std::getline(iss, line) && line != "\r") {
     int colon_pos = line.find(':');
     if (colon_pos != std::string::npos) {
       std::string key = line.substr(0, colon_pos);
       std::string val = line.substr(colon_pos + 2);
       val.pop_back();  // need to pop the \r
-      headers[transform_to_lowercase(key)] = val;
+      request_headers[transform_to_lowercase(key)] = val;
     }
   }
 
-  std::string body_input = "";
+  // Parse Request Body 
+  std::string request_body = "";
   while (std::getline(iss, line)) {
-    body_input += line + '\n';
+    request_body += line + '\n';
   }
-  body_input.pop_back(); // remove the last \n
+  request_body.pop_back();  // remove the last \n
+
+
+  // Construct Response
+  std::map<std::string, std::string> response_headers;
 
   if (method == "POST") {
     if (path.find("/files") != std::string::npos) {
       if (directory == "") {
-        send(client_socket, "HTTP/1.1 404 Not Found\r\n\r\n", 26, 0);
-        return;
+        send_response(client_socket, HttpResponseStartLine(404));
+      } else {
+        std::string filename = path.substr(7);
+        std::ofstream outputFile(directory + filename);
+        outputFile << request_body;
+        send_response(client_socket, HttpResponseStartLine(201));
       }
+    }
+  } else if (method == "GET") {  // GET request handler
+    if (path == "/") {
+      send_response(client_socket, HttpResponseStartLine(200));
+    } else if (path.substr(0, 5) == "/echo") {
+      add_response_header(response_headers, "Content-Type", "text/plain");
+      add_response_header(response_headers, "Content-Length",
+                          std::to_string((int)path.length() - 6));
+      send_response(client_socket, HttpResponseStartLine(200), response_headers,
+                    path.substr(6, (int)path.length() - 6));
+    } else if (path.find("/user-agent") != std::string::npos &&
+               request_headers.find("user-agent") != request_headers.end()) {
+      add_response_header(response_headers, "Content-Type", "text/plain");
+      add_response_header(response_headers, "Content-Length",
+                          std::to_string(request_headers["user-agent"].length()));
+      send_response(client_socket, HttpResponseStartLine(200), response_headers,
+                    request_headers["user-agent"]);
+    } else if (path.find("/files") != std::string::npos) {
       std::string filename = path.substr(7);
-      std::ofstream outputFile(directory + filename);
-      outputFile << body_input;
-      send(client_socket, "HTTP/1.1 201 Created\r\n\r\n", 24, 0);
-    }
-    return;
-  } 
-
-  // GET request handler
-  if (path == "/") {
-    send(client_socket, "HTTP/1.1 200 OK\r\n\r\n", 19, 0);
-  } else if (path.substr(0, 5) == "/echo") {
-    std::string response =
-        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " +
-        std::to_string((int)path.length() - 6) + "\r\n\r\n" +
-        path.substr(6, (int)path.length() - 6);
-    send(client_socket, response.c_str(), response.length(), 0);
-  } else if (path.find("/user-agent") != std::string::npos &&
-             headers.find("user-agent") != headers.end()) {
-    std::string response =
-        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " +
-        std::to_string(headers["user-agent"].length()) + "\r\n\r\n" +
-        headers["user-agent"];
-    send(client_socket, response.c_str(), response.length(), 0);
-  } else if (path.find("/files") != std::string::npos) {
-    std::string filename = path.substr(7);
-    std::ifstream inputFile(directory + filename);
-    if (!inputFile.is_open()) {
-      send(client_socket, "HTTP/1.1 404 Not Found\r\n\r\n", 26, 0);
-      return;
-    } else {
-      std::string line;
-      std::string res = "";
-      while (std::getline(inputFile, line)) {
-        res += line + '\n';
+      std::ifstream inputFile(directory + filename);
+      if (!inputFile.is_open()) {
+        send_response(client_socket, HttpResponseStartLine(404));
+      } else {
+        std::string inputLine;
+        std::string res = "";
+        while (std::getline(inputFile, inputLine)) {
+          res += inputLine + '\n';
+        }
+        res.pop_back();  // remove the last \n
+        add_response_header(response_headers, "Content-Type", "application/octet-stream");
+        add_response_header(response_headers, "Content-Length", std::to_string(res.length()));
+        send_response(client_socket, HttpResponseStartLine(200), response_headers, res);
       }
-      res.pop_back(); // remove the last \n
-      std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: " + std::to_string(res.length()) + "\r\n\r\n" + res;
-      send(client_socket, response.c_str(), response.length(), 0);
+    } else {
+      send_response(client_socket, HttpResponseStartLine(404));
     }
-  } else {
-    send(client_socket, "HTTP/1.1 404 Not Found\r\n\r\n", 26, 0);
   }
   close(client_socket);
 }
