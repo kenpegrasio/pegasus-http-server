@@ -138,16 +138,21 @@ std::vector<std::string> split_compression_header(
 }
 
 void process_client(int client_socket, std::string &directory) {
-  char buffer[BUFFER_SIZE] = {0};
-  int bytes_read = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
-  if (bytes_read <= 0) {
-    std::cerr << "Failed to receive data from client" << std::endl;
-    close(client_socket);
-    return;
+  std::string res = "";
+  while (true) {
+    char buffer[BUFFER_SIZE] = {0};
+    int bytes_read = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
+    if (bytes_read <= 0) {
+      std::cerr << "Failed to receive data from client" << std::endl;
+      close(client_socket);
+      return;
+    }
+    buffer[bytes_read] = '\0';
+    res += buffer;
+    if (res.find("\r\n\r\n") != std::string::npos) break;
   }
-  buffer[bytes_read] = '\0';
 
-  std::istringstream iss(buffer);
+  std::istringstream iss(res);
 
   std::string line;
   std::getline(iss, line);
