@@ -134,6 +134,10 @@ void process_client(int client_socket, std::string &directory) {
   // Construct Response
   std::map<std::string, std::string> response_headers;
 
+  if (request_headers.find("accept-encoding") != request_headers.end() && request_headers["accept-encoding"] == "gzip") {
+    add_response_header(response_headers, "Content-Encoding", "gzip");
+  }
+
   if (method == "POST") {
     if (path.find("/files") != std::string::npos) {
       if (directory == "") {
