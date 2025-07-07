@@ -247,10 +247,20 @@ void process_client(int client_socket, std::string &directory) {
     if (compress_body) {
       response_body = gzip_compress(response_body);
     }
+
     add_response_header(response_headers, "Content-Length",
                         std::to_string(response_body.size()));
+
+    if (request_headers.find("connection") != request_headers.end() && request_headers["connection"] == "close") {
+      add_response_header(response_headers, "Connection", "close");
+    }
+
     send_response(client_socket, response_start_line, response_headers,
                   response_body);
+    
+    if (request_headers.find("connection") != request_headers.end() && request_headers["connection"] == "close") {
+      break;
+    }
   }
 
   close(client_socket);
