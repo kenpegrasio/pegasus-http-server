@@ -1,187 +1,21 @@
 #include <arpa/inet.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <zlib.h>
 
-#include <cstdlib>
-#include <cstring>
 #include <fstream>
-#include <iostream>
-#include <map>
-#include <sstream>
-#include <string>
 #include <thread>
-#include <vector>
 
-#define BUFFER_SIZE 4096
-
-std::string transform_to_lowercase(std::string &s) {
-  std::string res = "";
-  for (int i = 0; i < (int)s.length(); i++) {
-    if (s[i] >= 'A' && s[i] <= 'Z') {
-      res += s[i] - 'A' + 'a';
-    } else {
-      res += s[i];
-    }
-  }
-  return res;
-}
-
-std::string gzip_compress(const std::string &input) {
-  z_stream zs{};
-  deflateInit2(&zs, Z_BEST_COMPRESSION, Z_DEFLATED,
-               15 + 16,  // 15 window bits + 16 = gzip
-               8, Z_DEFAULT_STRATEGY);
-
-  zs.next_in = (Bytef *)input.data();
-  zs.avail_in = input.size();
-
-  int ret;
-  char outbuffer[32768];
-  std::string outstring;
-
-  do {
-    zs.next_out = reinterpret_cast<Bytef *>(outbuffer);
-    zs.avail_out = sizeof(outbuffer);
-
-    ret = deflate(&zs, Z_FINISH);
-    outstring.append(outbuffer, sizeof(outbuffer) - zs.avail_out);
-  } while (ret == Z_OK);
-
-  deflateEnd(&zs);
-
-  if (ret != Z_STREAM_END) throw std::runtime_error("gzip compression failed!");
-
-  return outstring;
-}
-
-struct HttpResponseStartLine {
-  std::string protocol;
-  std::string status_code;
-  std::string status_text;
-
-  HttpResponseStartLine(int identifier, std::string new_protocol = "HTTP/1.1") {
-    protocol = new_protocol;
-    status_code = std::to_string(identifier);
-    if (identifier == 404)
-      status_text = "Not Found";
-    else if (identifier == 200)
-      status_text = "OK";
-    else if (identifier == 201)
-      status_text = "Created";
-  }
-
-  HttpResponseStartLine(std::string new_protocol, std::string new_status_code,
-                        std::string new_status_text) {
-    protocol = new_protocol;
-    status_code = new_status_code;
-    status_text = new_status_text;
-  }
-};
-
-void add_response_header(std::map<std::string, std::string> &headers,
-                         const std::string &key, const std::string &val) {
-  headers[key] = val;
-}
-
-void send_response(int client_socket, HttpResponseStartLine start_line) {
-  std::string res = "";
-  res += start_line.protocol + " " + start_line.status_code + " " +
-         start_line.status_text + "\r\n";
-  res += "\r\n";
-  send(client_socket, res.c_str(), res.length(), 0);
-}
-
-void send_response(int client_socket, HttpResponseStartLine start_line,
-                   std::map<std::string, std::string> &headers) {
-  std::string res = "";
-  res += start_line.protocol + " " + start_line.status_code + " " +
-         start_line.status_text + "\r\n";
-  for (auto [key, val] : headers) {
-    res += key + ": " + val + "\r\n";
-  }
-  res += "\r\n";
-  send(client_socket, res.c_str(), res.length(), 0);
-}
-
-void send_response(int client_socket, HttpResponseStartLine start_line,
-                   std::map<std::string, std::string> &headers,
-                   const std::string &body_message) {
-  std::string res = "";
-  res += start_line.protocol + " " + start_line.status_code + " " +
-         start_line.status_text + "\r\n";
-  for (auto [key, val] : headers) {
-    res += key + ": " + val + "\r\n";
-  }
-  res += "\r\n";
-  res += body_message;
-  send(client_socket, res.c_str(), res.length(), 0);
-}
-
-std::vector<std::string> split_compression_header(
-    std::string compression_header, char delimiter) {
-  std::vector<std::string> res;
-  std::string cur = "";
-  for (int i = 0; i < (int)compression_header.size(); i++) {
-    if (compression_header[i] == ' ') continue;
-    if (compression_header[i] == delimiter) {
-      res.push_back(cur);
-      cur.clear();
-      continue;
-    }
-    cur += compression_header[i];
-  }
-  if (!cur.empty()) res.push_back(cur);
-  return res;
-}
+#include "request_handler.h"
+#include "response_handler.h"
+#include "utils.h"
 
 void process_client(int client_socket, std::string &directory) {
   while (true) {
-    std::string res = "";
-    while (true) {
-      char buffer[BUFFER_SIZE] = {0};
-      int bytes_read = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
-      if (bytes_read <= 0) {
-        std::cerr << "Failed to receive data from client" << std::endl;
-        close(client_socket);
-        return;
-      }
-      buffer[bytes_read] = '\0';
-      res += buffer;
-      if (res.find("\r\n\r\n") != std::string::npos) break;
-    }
+    std::string res = read_request(client_socket);
+    if (res == "") return;
 
-    std::istringstream iss(res);
-
-    std::string line;
-    std::getline(iss, line);
-
-    // Parse Request
-    // Parse Request Start Line
-    std::istringstream request_stream(line);
     std::string method, path, version;
-    request_stream >> method >> path >> version;
-
-    // Parse Request Headers
     std::map<std::string, std::string> request_headers;
-    while (std::getline(iss, line) && line != "\r") {
-      int colon_pos = line.find(':');
-      if (colon_pos != std::string::npos) {
-        std::string key = line.substr(0, colon_pos);
-        std::string val = line.substr(colon_pos + 2);
-        val.pop_back();  // need to pop the \r
-        request_headers[transform_to_lowercase(key)] = val;
-      }
-    }
-
-    // Parse Request Body
     std::string request_body = "";
-    while (std::getline(iss, line)) {
-      request_body += line + '\n';
-    }
-    request_body.pop_back();  // remove the last \n
+    parse_request(method, path, version, request_headers, request_body, res);
 
     // Construct Response
     HttpResponseStartLine response_start_line = HttpResponseStartLine(200);
@@ -251,14 +85,16 @@ void process_client(int client_socket, std::string &directory) {
     add_response_header(response_headers, "Content-Length",
                         std::to_string(response_body.size()));
 
-    if (request_headers.find("connection") != request_headers.end() && request_headers["connection"] == "close") {
+    if (request_headers.find("connection") != request_headers.end() &&
+        request_headers["connection"] == "close") {
       add_response_header(response_headers, "Connection", "close");
     }
 
     send_response(client_socket, response_start_line, response_headers,
                   response_body);
-    
-    if (request_headers.find("connection") != request_headers.end() && request_headers["connection"] == "close") {
+
+    if (request_headers.find("connection") != request_headers.end() &&
+        request_headers["connection"] == "close") {
       break;
     }
   }
@@ -282,11 +118,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  // You can use print statements as follows for debugging, they'll be visible
-  // when running tests.
   std::cout << "Logs from your program will appear here!\n";
-
-  // Uncomment this block to pass the first stage
 
   int server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd < 0) {
